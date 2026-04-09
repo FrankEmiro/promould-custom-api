@@ -6,6 +6,19 @@ const { Readable } = require('stream');
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 
+// Raw binary body parser (for n8n "Binary" body type)
+app.use((req, res, next) => {
+  const ct = req.headers['content-type'] || '';
+  if (ct.includes('multipart/form-data')) return next(); // handled by multer
+  if (req.method === 'POST') {
+    const chunks = [];
+    req.on('data', chunk => chunks.push(chunk));
+    req.on('end', () => { req.rawBody = Buffer.concat(chunks); next(); });
+  } else {
+    next();
+  }
+});
+
 // Map ARGB hex to human-readable color names
 // Excel stores colors as ARGB (e.g. "FF00B050" = fully opaque green)
 function argbToColorName(argb) {
@@ -71,16 +84,19 @@ function getCellBgColor(cell) {
 }
 
 // POST /parse-excel
-// Accepts multipart/form-data with field "file" (binary xlsx)
+// Accepts:
+//   - multipart/form-data with field "file"  (curl / form)
+//   - raw binary body                         (n8n "Binary" body type)
 // Returns array of row objects, each with _cell_styles
 app.post('/parse-excel', upload.single('file'), async (req, res) => {
   try {
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded. Use field name "file".' });
+    const buffer = req.file?.buffer ?? req.rawBody;
+    if (!buffer || buffer.length === 0) {
+      return res.status(400).json({ error: 'No file received. Send as form-data field "file" or raw binary body.' });
     }
 
     const workbook = new ExcelJS.Workbook();
-    const stream = Readable.from(req.file.buffer);
+    const stream = Readable.from(buffer);
     await workbook.xlsx.read(stream);
 
     // Use the first sheet by default, or ?sheet=SheetName
@@ -147,9 +163,10 @@ app.get('/health', (req, res) => res.json({ status: 'ok' }));
 // List sheets
 app.post('/list-sheets', upload.single('file'), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded.' });
+    const buffer = req.file?.buffer ?? req.rawBody;
+    if (!buffer || buffer.length === 0) return res.status(400).json({ error: 'No file received.' });
     const workbook = new ExcelJS.Workbook();
-    const stream = Readable.from(req.file.buffer);
+    const stream = Readable.from(buffer);
     await workbook.xlsx.read(stream);
     res.json(workbook.worksheets.map(ws => ws.name));
   } catch (err) {
