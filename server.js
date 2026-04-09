@@ -6,14 +6,33 @@ const { Readable } = require('stream');
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 
+function log(label, data) {
+  const ts = new Date().toISOString();
+  console.log(`[${ts}] ${label}`, data !== undefined ? data : '');
+}
+
+// Request logger
+app.use((req, res, next) => {
+  log(`→ ${req.method} ${req.path}`, { query: req.query, 'content-type': req.headers['content-type'] });
+  next();
+});
+
 // Raw binary body parser (for n8n "Binary" body type)
 app.use((req, res, next) => {
   const ct = req.headers['content-type'] || '';
-  if (ct.includes('multipart/form-data')) return next(); // handled by multer
+  if (ct.includes('multipart/form-data')) {
+    log('body-parser', 'multipart/form-data detected → delegating to multer');
+    return next();
+  }
   if (req.method === 'POST') {
+    log('body-parser', 'raw binary body — reading stream');
     const chunks = [];
     req.on('data', chunk => chunks.push(chunk));
-    req.on('end', () => { req.rawBody = Buffer.concat(chunks); next(); });
+    req.on('end', () => {
+      req.rawBody = Buffer.concat(chunks);
+      log('body-parser', `raw body received: ${req.rawBody.length} bytes`);
+      next();
+    });
   } else {
     next();
   }
@@ -90,14 +109,21 @@ function getCellBgColor(cell) {
 // Returns array of row objects, each with _cell_styles
 app.post('/parse-excel', upload.single('file'), async (req, res) => {
   try {
+    const source = req.file ? 'form-data' : 'raw-binary';
     const buffer = req.file?.buffer ?? req.rawBody;
+    log('parse-excel', `buffer source: ${source}, size: ${buffer?.length ?? 0} bytes`);
+
     if (!buffer || buffer.length === 0) {
+      log('parse-excel', 'ERROR: no file received');
       return res.status(400).json({ error: 'No file received. Send as form-data field "file" or raw binary body.' });
     }
 
     const workbook = new ExcelJS.Workbook();
     const stream = Readable.from(buffer);
     await workbook.xlsx.read(stream);
+
+    const sheets = workbook.worksheets.map(ws => ws.name);
+    log('parse-excel', `workbook loaded — sheets: ${JSON.stringify(sheets)}`);
 
     // Use the first sheet by default, or ?sheet=SheetName
     const sheetName = req.query.sheet;
@@ -106,19 +132,22 @@ app.post('/parse-excel', upload.single('file'), async (req, res) => {
       : workbook.worksheets[0];
 
     if (!worksheet) {
+      log('parse-excel', `ERROR: sheet "${sheetName}" not found`);
       return res.status(404).json({ error: `Sheet "${sheetName}" not found.` });
     }
+
+    log('parse-excel', `using sheet: "${worksheet.name}", rowCount: ${worksheet.rowCount}`);
 
     const rows = [];
     let headers = [];
 
     worksheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
       if (rowNumber === 1) {
-        // First row = headers
         headers = row.values.slice(1).map((v, i) => {
           if (v === null || v === undefined || v === '') return `Col${i + 1}`;
           return String(v).trim();
         });
+        log('parse-excel', `headers (${headers.length}): ${JSON.stringify(headers)}`);
         return;
       }
 
@@ -129,7 +158,6 @@ app.post('/parse-excel', upload.single('file'), async (req, res) => {
         const cell = row.getCell(i + 1);
         const value = cell.value;
 
-        // Resolve formula result if present
         if (value && typeof value === 'object' && value.result !== undefined) {
           rowObj[header] = value.result;
         } else if (value && typeof value === 'object' && value instanceof Date) {
@@ -139,40 +167,48 @@ app.post('/parse-excel', upload.single('file'), async (req, res) => {
         }
 
         const bg = getCellBgColor(cell);
-        if (bg !== null) {
-          cellStyles[header] = { bg };
-        } else {
-          cellStyles[header] = { bg: null };
-        }
+        cellStyles[header] = { bg: bg ?? null };
       });
 
       rowObj._cell_styles = cellStyles;
       rows.push(rowObj);
     });
 
+    log('parse-excel', `done — ${rows.length} data rows returned`);
     res.json(rows);
   } catch (err) {
+    log('parse-excel', `EXCEPTION: ${err.message}`);
     console.error(err);
     res.status(500).json({ error: err.message });
   }
 });
 
 // Health check
-app.get('/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/health', (req, res) => {
+  log('health', 'ok');
+  res.json({ status: 'ok' });
+});
 
 // List sheets
 app.post('/list-sheets', upload.single('file'), async (req, res) => {
   try {
     const buffer = req.file?.buffer ?? req.rawBody;
-    if (!buffer || buffer.length === 0) return res.status(400).json({ error: 'No file received.' });
+    log('list-sheets', `buffer size: ${buffer?.length ?? 0} bytes`);
+    if (!buffer || buffer.length === 0) {
+      log('list-sheets', 'ERROR: no file received');
+      return res.status(400).json({ error: 'No file received.' });
+    }
     const workbook = new ExcelJS.Workbook();
     const stream = Readable.from(buffer);
     await workbook.xlsx.read(stream);
-    res.json(workbook.worksheets.map(ws => ws.name));
+    const sheets = workbook.worksheets.map(ws => ws.name);
+    log('list-sheets', `sheets: ${JSON.stringify(sheets)}`);
+    res.json(sheets);
   } catch (err) {
+    log('list-sheets', `EXCEPTION: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
 
 const PORT = process.env.PORT || 3200;
-app.listen(PORT, () => console.log(`Excel Style API running on port ${PORT}`));
+app.listen(PORT, () => log('startup', `Promould Custom API running on port ${PORT}`));
