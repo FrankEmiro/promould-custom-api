@@ -156,5 +156,33 @@ app.post('/list-sheets', upload.single('file'), async (req, res) => {
   }
 });
 
+// Debug: inspect raw cell fills from first row of data
+app.post('/debug-styles', upload.single('file'), async (req, res) => {
+  try {
+    const buffer = req.file?.buffer ?? req.rawBody;
+    if (!buffer || buffer.length === 0) return res.status(400).json({ error: 'No file received.' });
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.read(Readable.from(buffer));
+    const ws = workbook.worksheets[0];
+    const result = [];
+    // Inspect first 5 data rows
+    let count = 0;
+    ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+      if (rowNumber === 1 || count >= 2) return;
+      count++;
+      row.eachCell({ includeEmpty: false }, (cell) => {
+        result.push({
+          address: cell.address,
+          fill: cell.fill,
+          value: typeof cell.value === 'object' ? JSON.stringify(cell.value) : cell.value,
+        });
+      });
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3200;
 app.listen(PORT, () => log('startup', `Promould Custom API running on port ${PORT}`));
