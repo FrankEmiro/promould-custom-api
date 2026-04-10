@@ -38,68 +38,14 @@ app.use((req, res, next) => {
   }
 });
 
-// Map ARGB hex to human-readable color names
-// Excel stores colors as ARGB (e.g. "FF00B050" = fully opaque green)
-function argbToColorName(argb) {
-  if (!argb) return null;
-
-  // Strip alpha channel → get RGB
-  const rgb = argb.replace(/^FF/i, '').toUpperCase();
-
-  const colorMap = {
-    // Greens
-    '00B050': 'green',
-    '92D050': 'green',
-    '00FF00': 'green',
-    '70AD47': 'green',
-    'E2EFDA': 'green_light',
-    // Yellows
-    'FFFF00': 'yellow',
-    'FFEB9C': 'yellow',
-    'FFC000': 'orange',
-    'FFD966': 'yellow',
-    'FFF2CC': 'yellow_light',
-    // Reds
-    'FF0000': 'red',
-    'FF0000': 'red',
-    'C00000': 'red',
-    'FF4444': 'red',
-    'FFE7E7': 'red_light',
-    'FCE4D6': 'red_light',
-    'FA8072': 'red',
-    // Blues
-    '0070C0': 'blue',
-    '4472C4': 'blue',
-    '2E75B6': 'blue',
-    'BDD7EE': 'blue_light',
-    'DEEAF1': 'blue_light',
-    // Orange
-    'ED7D31': 'orange',
-    'F4B942': 'orange',
-    // White / no fill
-    'FFFFFF': null,
-    // Grey
-    'A6A6A6': 'grey',
-    'D9D9D9': 'grey_light',
-    'BFBFBF': 'grey',
-  };
-
-  if (colorMap.hasOwnProperty(rgb)) return colorMap[rgb];
-
-  // Fallback: return hex string so the AI can still reason about it
-  return `#${rgb}`;
-}
-
+// Returns the background color of a cell as #RRGGBB hex, or null if no fill
 function getCellBgColor(cell) {
   const fill = cell.fill;
-  if (!fill) return null;
-  if (fill.type === 'pattern' && fill.fgColor) {
-    const argb = fill.fgColor.argb || fill.fgColor.theme;
-    if (argb && typeof argb === 'string') {
-      return argbToColorName(argb);
-    }
-  }
-  return null;
+  if (!fill || fill.type !== 'pattern') return null;
+  const argb = fill.fgColor?.argb;
+  if (!argb || typeof argb !== 'string' || argb.toUpperCase() === 'FFFFFFFF') return null;
+  const rgb = argb.replace(/^FF/i, '').toUpperCase();
+  return `#${rgb}`;
 }
 
 // POST /parse-excel
